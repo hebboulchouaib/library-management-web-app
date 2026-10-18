@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Bibliothèque universitaire</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="logo">
+      <span class="logo-mark" data-ico="book"></span>
+      <div><strong id="libName">Bibliothèque</strong><small>Gestion des emprunts</small></div>
+    </div>
+
+    <div class="me">
+      <span class="avatar" id="meAvatar">B</span>
+      <span id="meName">Bibliothécaire</span>
+    </div>
+
+    <p class="nav-label">Menu</p>
+    <nav id="nav">
+      <button data-view="dashboard" data-ico="dash"><span><span class="full">Tableau de bord</span><span class="short">Accueil</span></span></button>
+      <button data-view="livres" data-ico="book"><span><span class="full">Livres</span><span class="short">Livres</span></span><em id="cnt-livres">0</em></button>
+      <button data-view="etudiants" data-ico="users"><span><span class="full">Étudiants</span><span class="short">Étudiants</span></span><em id="cnt-etudiants">0</em></button>
+      <button data-view="emprunts" data-ico="swap"><span><span class="full">Emprunts</span><span class="short">Emprunts</span></span><em id="cnt-emprunts">0</em></button>
+      <button data-view="analyses" data-ico="chart"><span><span class="full">Analyses</span><span class="short">Analyses</span></span></button>
+      <button data-view="settings" data-ico="gear"><span><span class="full">Paramètres</span><span class="short">Réglages</span></span></button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="cta" id="quickLoan" data-ico="plus">Nouvel emprunt</button>
+      <p id="sideNote">Mode invité : les données restent sur cet appareil.</p>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="top">
+      <div class="top-tools">
+        <label class="search">
+          <span data-ico="search"></span>
+          <input id="search" type="search" placeholder="Rechercher" aria-label="Rechercher">
+        </label>
+        <span class="chip" id="dateChip"></span>
+        <button class="icon-btn" id="themeBtn" aria-label="Changer de thème"></button>
+        <div class="bell-wrap">
+          <button class="icon-btn" id="bellBtn" data-ico="bell" aria-label="Notifications"><b id="bellCount" hidden></b></button>
+          <div id="bellPanel" class="pop" hidden></div>
+        </div>
+        <div class="account">
+          <span class="mode guest" id="modeBadge">Mode invité</span>
+          <button class="btn primary" id="authBtn">Se connecter</button>
+        </div>
+      </div>
+      <div class="titles">
+        <h1 id="pageTitle"></h1>
+        <p id="pageSub"></p>
+      </div>
+    </header>
+
+    <section id="content"></section>
+    <footer class="legal">
+      <a href="terms.html">Conditions d'utilisation</a>
+      <a href="privacy.html">Confidentialité</a>
+    </footer>
+  </div>
+</div>
+
+<dialog id="dlg">
+  <form id="form" method="dialog">
+    <h2 id="dlgTitle"></h2>
+    <div id="dlgFields"></div>
+    <p id="dlgError" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="dlgCancel">Annuler</button>
+      <button type="submit" class="btn primary">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="authDlg">
+  <form id="authForm" method="dialog">
+    <h2 id="authTitle">Se connecter</h2>
+    <p class="muted">Votre bibliothèque privée, enregistrée dans la base de données. Personne d'autre n'y a accès.</p>
+    <div class="tabs">
+      <button type="button" class="on" data-auth="login">Connexion</button>
+      <button type="button" data-auth="signup">Créer un compte</button>
+    </div>
+    <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
+    <div class="field"><label>Mot de passe</label><input name="password" type="password" minlength="6" required autocomplete="current-password"></div>
+    <p id="authError" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="authGuest">Continuer en invité</button>
+      <button type="submit" class="btn primary" id="authSubmit">Se connecter</button>
+    </div>
+  </form>
+</dialog>
+
+<input type="file" id="importFile" accept="application/json" hidden>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
