@@ -1,8 +1,9 @@
+
 const KEYS = { livres: "bib_livres", etudiants: "bib_etudiants", emprunts: "bib_emprunts" };
 const SETTINGS_KEY = "bib_settings";
 const DEFAULT_SETTINGS = { libName: "Bibliothèque universitaire", user: "Bibliothécaire", duree: 14 };
 
-const db = {
+const local = {
   _read(t) {
     try { return JSON.parse(localStorage.getItem(KEYS[t])) || []; }
     catch { return []; }
@@ -22,6 +23,24 @@ const db = {
   },
   async remove(t, id) { this._write(t, this._read(t).filter(r => r.id !== id)); },
 
+  async emprunter(etudiant_id, livre_id, date_emprunt, duree) {
+    const livre = this._read("livres").find(l => l.id === livre_id);
+    if (!livre || livre.quantite < 1) throw new Error("Ce livre n'est plus disponible.");
+    await this.insert("emprunts", {
+      etudiant_id, livre_id, date_emprunt,
+      date_retour_prevue: addDays(date_emprunt, duree),
+      date_retour_effective: null,
+    });
+    await this.update("livres", livre_id, { quantite: livre.quantite - 1 });
+  },
+  async rendre(id, date) {
+    const emp = this._read("emprunts").find(x => x.id === id);
+    if (!emp || emp.date_retour_effective) throw new Error("Cet emprunt est introuvable ou déjà rendu.");
+    await this.update("emprunts", id, { date_retour_effective: date });
+    const livre = this._read("livres").find(l => l.id === emp.livre_id);
+    if (livre) await this.update("livres", livre.id, { quantite: livre.quantite + 1 });
+  },
+
   getSettings() {
     try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY)) }; }
     catch { return { ...DEFAULT_SETTINGS }; }
@@ -33,27 +52,115 @@ const db = {
   resetAll() { Object.values(KEYS).forEach(k => localStorage.removeItem(k)); },
 };
 
+
+const COLS = {
+  livres: ["id", "titre", "auteur", "categorie", "annee", "quantite"],
+  etudiants: ["id", "nom", "prenom", "email", "telephone"],
+  emprunts: ["id", "etudiant_id", "livre_id", "date_emprunt", "date_retour_prevue", "date_retour_effective"],
+};
+const pick = (row, cols) => Object.fromEntries(cols.map(c => [c, row[c] ?? null]));
+
+const remote = {
+  async list(t) {
+    const { data, error } = await sb.from(t).select("*").order("id");
+    if (error) throw error;
+    return data;
+  },
+  async insert(t, row) {
+    const { data, error } = await sb.from(t).insert(row).select().single();
+    if (error) throw error;
+    return data;
+  },
+  async update(t, id, patch) {
+    const { error } = await sb.from(t).update(patch).eq("id", id);
+    if (error) throw error;
+  },
+  async remove(t, id) {
+    const { error } = await sb.from(t).delete().eq("id", id);
+    if (error) throw error;
+  },
+
+  // Emprunt et retour : une seule opération côté base (voir les fonctions SQL emprunter et rendre)
+  async emprunter(etudiant_id, livre_id, date_emprunt, duree) {
+    const { error } = await sb.rpc("emprunter", { p_etudiant_id: etudiant_id, p_livre_id: livre_id, p_date_emprunt: date_emprunt, p_duree: duree });
+    if (error) throw error;
+  },
+  async rendre(id, date) {
+    const { error } = await sb.rpc("rendre", { p_emprunt_id: id, p_date: date });
+    if (error) throw error;
+  },
+
+  async exportAll() {
+    const out = {};
+    for (const t of ["livres", "etudiants", "emprunts"]) out[t] = (await this.list(t)).map(r => pick(r, COLS[t]));
+    return out;
+  },
+  async resetAll() {
+    for (const t of ["emprunts", "livres", "etudiants"]) {
+      const { error } = await sb.from(t).delete().gt("id", 0);
+      if (error) throw error;
+    }
+  },
+  
+  async importAll(d) {
+    await this.resetAll();
+    const copy = async (t, rows) => {
+      const ids = {};
+      for (const r of rows || []) {
+        const { id, ...rest } = pick(r, COLS[t]);
+        ids[id] = (await this.insert(t, rest)).id;
+      }
+      return ids;
+    };
+    const etu = await copy("etudiants", d.etudiants);
+    const liv = await copy("livres", d.livres);
+    for (const r of d.emprunts || []) {
+      const { id, ...rest } = pick(r, COLS.emprunts);
+      rest.etudiant_id = etu[rest.etudiant_id] ?? null;
+      rest.livre_id = liv[rest.livre_id] ?? null;
+      await this.insert("emprunts", rest);
+    }
+  },
+};
+
+
+const store = () => (session && sb ? remote : local);
+const db = {
+  list: t => store().list(t),
+  insert: (t, row) => store().insert(t, row),
+  update: (t, id, patch) => store().update(t, id, patch),
+  remove: (t, id) => store().remove(t, id),
+  emprunter: (...a) => store().emprunter(...a),
+  rendre: (...a) => store().rendre(...a),
+  exportAll: () => store().exportAll(),
+  importAll: d => store().importAll(d),
+  resetAll: () => store().resetAll(),
+  getSettings: () => local.getSettings(),
+  saveSettings: x => local.saveSettings(x),
+};
+
 function seed() {
-  if (db._read("livres").length || db._read("etudiants").length || db._read("emprunts").length) return;
-  db._write("livres", [
+  if (local._read("livres").length || local._read("etudiants").length || local._read("emprunts").length) return;
+  local._write("livres", [
     { id: 1, titre: "Introduction à l'algorithmique", auteur: "T. Cormen", categorie: "Informatique", annee: 2010, quantite: 4 },
     { id: 2, titre: "Les Misérables", auteur: "Victor Hugo", categorie: "Littérature", annee: 1862, quantite: 2 },
     { id: 3, titre: "Systèmes d'exploitation", auteur: "A. Tanenbaum", categorie: "Informatique", annee: 2014, quantite: 1 },
     { id: 4, titre: "Analyse mathématique", auteur: "J. Dieudonné", categorie: "Mathématiques", annee: 1968, quantite: 3 },
     { id: 5, titre: "L'Étranger", auteur: "Albert Camus", categorie: "Littérature", annee: 1942, quantite: 0 },
   ]);
-  db._write("etudiants", [
+  local._write("etudiants", [
     { id: 1, nom: "Benali", prenom: "Sara", email: "sara.benali@usthb.dz", telephone: "0550 11 22 33" },
     { id: 2, nom: "Haddad", prenom: "Yacine", email: "yacine.haddad@usthb.dz", telephone: "0661 44 55 66" },
     { id: 3, nom: "Kaci", prenom: "Lina", email: "lina.kaci@usthb.dz", telephone: "0770 77 88 99" },
   ]);
   const t = today();
-  db._write("emprunts", [
+  local._write("emprunts", [
     { id: 1, etudiant_id: 1, livre_id: 2, date_emprunt: addDays(t, -30), date_retour_prevue: addDays(t, -16), date_retour_effective: null },
     { id: 2, etudiant_id: 2, livre_id: 3, date_emprunt: addDays(t, -3), date_retour_prevue: addDays(t, 11), date_retour_effective: null },
     { id: 3, etudiant_id: 3, livre_id: 1, date_emprunt: addDays(t, -20), date_retour_prevue: addDays(t, -6), date_retour_effective: addDays(t, -8) },
   ]);
 }
+
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -118,9 +225,13 @@ function openForm(title, fields, values, onSave) {
 }
 $("#dlgCancel").onclick = () => $("#dlg").close();
 
-const SUPABASE_URL = "";
-const SUPABASE_KEY = "";
-let session = null; // null = invité (localStorage) ; sinon { email }
+
+// Connexion Supabase. Ces deux valeurs sont publiques par conception :
+// la protection des données vient des règles RLS de la base, pas du secret de la clé.
+const SUPABASE_URL = "https://vlqbxcegeygjhwogbjse.supabase.co";
+const SUPABASE_KEY = "sb_publishable__ZmA_SH3DMfL0eHFw83c0Q_GJeE7JqR";
+const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+let session = null; // null = invité ; sinon { email }
 let authMode = "login";
 
 let view = "dashboard";
@@ -142,15 +253,27 @@ const greeting = () => { const h = new Date().getHours(); return h < 6 || h >= 1
 const skeleton = () => `<div class="sk-wrap" aria-busy="true"><div class="sk" style="height:90px"></div><div class="sk" style="height:220px"></div></div>`;
 let firstLoad = true;
 
+let renderId = 0;
+
 async function render() {
+  const my = ++renderId;
   if (firstLoad) $("#content").innerHTML = skeleton();
-  const D = await loadAll();
+  let D;
+  try { D = await loadAll(); }
+  catch (err) {
+    console.error(err);
+    if (my !== renderId) return;
+    firstLoad = false;
+    $("#content").innerHTML = `<p class="empty">Impossible de charger les données. Vérifiez votre connexion.<br><br><button class="btn primary" data-act="retry">Réessayer</button></p>`;
+    return;
+  }
+  if (my !== renderId) return;
   firstLoad = false;
   const S = db.getSettings();
   const actifs = D.loans.filter(x => x.st !== "Rendu");
   const retards = D.loans.filter(x => x.st === "En retard");
 
-  // Sidebar + barre du haut
+
   $("#libName").textContent = S.libName;
   $("#meName").textContent = S.user;
   $("#meAvatar").textContent = (S.user[0] || "B").toUpperCase();
@@ -188,7 +311,6 @@ async function render() {
   const views = { dashboard: vDash, livres: vLivres, etudiants: vEtudiants, emprunts: vEmprunts, analyses: vAnalyses, settings: vSettings };
   $("#content").innerHTML = views[view](D, S);
 }
-
 
 function vDash(D) {
   const enCours = D.loans.filter(x => x.st === "En cours").length;
@@ -240,6 +362,7 @@ function vDash(D) {
       </div>
     </div>`;
 }
+
 
 const livreFields = [
   { name: "titre", label: "Titre", required: true },
@@ -318,7 +441,6 @@ function vEtudiants(D) {
     <div class="grid">${cards || `<p class="empty">${q ? "Aucun étudiant ne correspond à votre recherche." : "Aucun étudiant inscrit. Ajoutez le premier."}</p>`}</div>`;
 }
 
-
 function vEmprunts(D) {
   const q = query.trim().toLowerCase();
   const loans = D.loans.filter(x => !q || `${x.l?.titre} ${x.s?.nom} ${x.s?.prenom}`.toLowerCase().includes(q))
@@ -364,20 +486,11 @@ async function newEmprunt(pre = {}) {
     { name: "date_emprunt", label: "Date d'emprunt", type: "date", required: true },
     { name: "duree", label: "Durée autorisée (jours)", type: "number", required: true, min: 1 },
   ], { date_emprunt: today(), duree: db.getSettings().duree, ...pre }, async d => {
-    const livre = (await db.list("livres")).find(l => l.id === +d.livre_id);
-    if (!livre || livre.quantite < 1) return "Ce livre n'est plus disponible.";
-    await db.insert("emprunts", {
-      etudiant_id: +d.etudiant_id, livre_id: +d.livre_id,
-      date_emprunt: d.date_emprunt,
-      date_retour_prevue: addDays(d.date_emprunt, +d.duree),
-      date_retour_effective: null,
-    });
-    await db.update("livres", livre.id, { quantite: livre.quantite - 1 });
+    try { await db.emprunter(+d.etudiant_id, +d.livre_id, d.date_emprunt, +d.duree); }
+    catch (err) { return err.message || "Impossible d'enregistrer l'emprunt."; }
     toast("Emprunt enregistré");
   });
 }
-
-
 function vAnalyses(D) {
   // Livres les plus demandés : nombre d'emprunts par livre (égalité : ordre alphabétique)
   const parLivre = {};
@@ -387,6 +500,8 @@ function vAnalyses(D) {
     .filter(x => x.n > 0)
     .sort((a, b) => b.n - a.n || a.l.titre.localeCompare(b.l.titre, "fr"))
     .slice(0, 5);
+
+  
   const parEtu = {};
   D.emprunts.forEach(e => {
     const r = parEtu[e.etudiant_id] || (parEtu[e.etudiant_id] = { total: 0, rendus: 0 });
@@ -426,7 +541,6 @@ function vAnalyses(D) {
       </div>
     </div>`;
 }
-
 
 function vSettings(D, S) {
   return `
@@ -476,22 +590,56 @@ function setAuthMode(m) {
 }
 document.querySelectorAll("[data-auth]").forEach(b => b.addEventListener("click", () => setAuthMode(b.dataset.auth)));
 
-$("#authBtn").onclick = () => {
-  if (session) { session = null; toast("Déconnecté. Retour en mode invité."); render(); return; }
+$("#authBtn").onclick = async () => {
+  if (session) {
+    if (sb) await sb.auth.signOut();
+    toast("Déconnecté. Retour en mode invité.");
+    return;
+  }
   setAuthMode("login");
   $("#authDlg").showModal();
 };
 $("#authGuest").onclick = () => $("#authDlg").close();
 
-$("#authForm").addEventListener("submit", e => {
+function authMsg(err) {
+  const m = err.message || "";
+  if (/invalid login credentials/i.test(m)) return "Email ou mot de passe incorrect.";
+  if (/already registered/i.test(m)) return "Un compte existe déjà avec cet email. Connectez-vous.";
+  if (/rate limit/i.test(m)) return "Trop de tentatives. Réessayez dans quelques minutes.";
+  if (/password/i.test(m)) return "Mot de passe refusé : utilisez au moins 6 caractères.";
+  return "Une erreur est survenue : " + m;
+}
+
+$("#authForm").addEventListener("submit", async e => {
   e.preventDefault();
-  if (!SUPABASE_URL) {
-    $("#authError").textContent = "La connexion sera activée à la prochaine étape, quand la base de données sera branchée. En attendant, continuez en mode invité.";
-    $("#authError").hidden = false;
+  const box = $("#authError");
+  box.hidden = true;
+  if (!sb) { box.textContent = "Connexion indisponible : la bibliothèque Supabase n'a pas été chargée."; box.hidden = false; return; }
+
+  const { email, password } = Object.fromEntries(new FormData(e.target));
+  const btn = $("#authSubmit");
+  btn.disabled = true;
+  const res = authMode === "login"
+    ? await sb.auth.signInWithPassword({ email, password })
+    : await sb.auth.signUp({ email, password });
+  btn.disabled = false;
+
+  if (res.error) { box.textContent = authMsg(res.error); box.hidden = false; return; }
+  if (!res.data.session) {
+    box.textContent = "Compte créé. Vérifiez votre boîte mail pour confirmer votre adresse, puis connectez-vous.";
+    box.hidden = false;
     return;
   }
-
+  e.target.reset();
+  $("#authDlg").close();
+  toast(authMode === "login" ? "Connecté" : "Compte créé");
 });
+
+if (sb) {
+  sb.auth.onAuthStateChange((_event, s) => {
+    setTimeout(() => { session = s ? { email: s.user.email } : null; firstLoad = true; render(); }, 0);
+  });
+}
 
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
@@ -513,13 +661,14 @@ $("#importFile").addEventListener("change", async e => {
   const f = e.target.files[0];
   e.target.value = "";
   if (!f) return;
+  let d;
   try {
-    const d = JSON.parse(await f.text());
+    d = JSON.parse(await f.text());
     if (!d || typeof d !== "object" || !("livres" in d)) throw new Error();
-    db.importAll(d);
-    toast("Données importées");
-    render();
-  } catch { toast("Fichier invalide."); }
+  } catch { toast("Fichier invalide."); return; }
+  await db.importAll(d);
+  toast("Données importées");
+  render();
 });
 
 document.addEventListener("click", async e => {
@@ -528,6 +677,7 @@ document.addEventListener("click", async e => {
   const id = +b.dataset.id;
 
   switch (b.dataset.act) {
+    case "retry": render(); break;
     case "cat": cat = b.dataset.cat; render(); break;
     case "add-livre":
       openForm("Ajouter un livre", livreFields, {}, async d => { await db.insert("livres", parseLivre(d)); toast("Livre ajouté"); });
@@ -558,26 +708,31 @@ document.addEventListener("click", async e => {
     case "add-emprunt":
       newEmprunt({ ...(b.dataset.livre && { livre_id: b.dataset.livre }), ...(b.dataset.etu && { etudiant_id: b.dataset.etu }) });
       break;
-    case "return": {
-      const emp = (await db.list("emprunts")).find(x => x.id === id);
-      const livre = (await db.list("livres")).find(x => x.id === emp.livre_id);
-      await db.update("emprunts", id, { date_retour_effective: today() });
-      if (livre) await db.update("livres", livre.id, { quantite: livre.quantite + 1 });
-      toast("Retour enregistré"); render();
+    case "return":
+      try { await db.rendre(id, today()); toast("Retour enregistré"); }
+      catch (err) { toast(err.message || "Impossible d'enregistrer le retour."); }
+      render();
       break;
-    }
     case "export": {
-      const url = URL.createObjectURL(new Blob([JSON.stringify(db.exportAll(), null, 2)], { type: "application/json" }));
+      const url = URL.createObjectURL(new Blob([JSON.stringify(await db.exportAll(), null, 2)], { type: "application/json" }));
       const a = Object.assign(document.createElement("a"), { href: url, download: `bibliotheque-${today()}.json` });
       a.click(); URL.revokeObjectURL(url);
       break;
     }
-    case "import": $("#importFile").click(); break;
+    case "import":
+      if (confirm("L'import remplace toutes les données actuelles. Continuer ?")) $("#importFile").click();
+      break;
     case "reset":
-      if (confirm("Effacer tous les livres, étudiants et emprunts ? Cette action est définitive.")) { db.resetAll(); toast("Données effacées"); render(); }
+      if (confirm("Effacer tous les livres, étudiants et emprunts ? Cette action est définitive.")) { await db.resetAll(); toast("Données effacées"); render(); }
       break;
   }
 });
+
+window.addEventListener("unhandledrejection", e => {
+  console.error(e.reason);
+  toast("Erreur : " + (e.reason?.message || "opération impossible. Réessayez."));
+});
+
 document.querySelectorAll("[data-ico]").forEach(el => el.insertAdjacentHTML("afterbegin", ico(el.dataset.ico)));
 applyTheme(localStorage.getItem("bib_theme") || "light");
 seed();
