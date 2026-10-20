@@ -1,0 +1,18 @@
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: "0 8 * * 1,4"
+  workflow_dispatch:   
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the ping function
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            -X POST "https://vlqbxcegeygjhwogbjse.supabase.co/rest/v1/rpc/ping" \
+            -H "apikey: sb_publishable__ZmA_SH3DMfL0eHFw83c0Q_GJeE7JqR" \
+            -H "Content-Type: application/json" \
+            -d '{}'
