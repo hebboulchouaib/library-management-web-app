@@ -7,6 +7,7 @@ A web application for managing a university library: books, students, loans and 
 You can try it straight away in guest mode, with no sign-up. Create an account if you want your own private library stored in the database.
 
 This is the web version of a university project from the Database 1 module at USTHB (Faculty of Computer Science). The original was a desktop application written in Java, JavaFX and Oracle. I rebuilt it for the web so that anyone can open it from a link, with no installation or compilation.
+Looking for the original desktop version? It is here: [Library Management System in Java, JavaFX and Oracle](https://github.com/hebboulchouaib/library-management-java-app).
 
 ## What it does
 
